@@ -1,0 +1,55 @@
+#include <wiringPi.h>
+#include <iostream>
+
+#define MOTOR_L1 17
+#define MOTOR_L2 27
+#define MOTOR_R1 22
+#define MOTOR_R2 23
+#define SPRAYER 24  // Relay for water pump
+
+void setup() {
+    if (wiringPiSetupGpio() == -1) {
+        std::cerr << "❌ WiringPi setup failed!" << std::endl;
+        exit(1);
+    }
+    
+    pinMode(MOTOR_L1, OUTPUT);
+    pinMode(MOTOR_L2, OUTPUT);
+    pinMode(MOTOR_R1, OUTPUT);
+    pinMode(MOTOR_R2, OUTPUT);
+    pinMode(SPRAYER, OUTPUT);
+}
+
+void moveForward() {
+    digitalWrite(MOTOR_L1, HIGH);
+    digitalWrite(MOTOR_L2, LOW);
+    digitalWrite(MOTOR_R1, HIGH);
+    digitalWrite(MOTOR_R2, LOW);
+}
+
+void stopMotors() {
+    digitalWrite(MOTOR_L1, LOW);
+    digitalWrite(MOTOR_L2, LOW);
+    digitalWrite(MOTOR_R1, LOW);
+    digitalWrite(MOTOR_R2, LOW);
+}
+
+void activateSprayer() {
+    std::cout << "💦 Spraying water/foam..." << std::endl;
+    digitalWrite(SPRAYER, HIGH);
+    delay(5000); // Spray for 5 seconds
+    digitalWrite(SPRAYER, LOW);
+}
+
+int main() {
+    setup();
+    std::cout << "🔥 Fire Detected! Moving drone towards fire..." << std::endl;
+    moveForward();
+    delay(3000); // Move forward for 3 seconds
+
+    activateSprayer();
+
+    std::cout << "✅ Fire Suppression Complete. Stopping motors." << std::endl;
+    stopMotors();
+    return 0;
+}
