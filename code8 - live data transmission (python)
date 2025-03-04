@@ -1,0 +1,38 @@
+pip install paho-mqtt            # Install MQTT for IoT Data Sharing
+
+  import paho.mqtt.client as mqtt
+import json
+import time
+import random
+
+# MQTT Broker Details
+BROKER = "broker.hivemq.com"  # Free Public MQTT broker
+TOPIC = "firefighter/drone"
+
+# Set up MQTT client
+client = mqtt.Client()
+
+def connect_mqtt():
+    try:
+        client.connect(BROKER, 1883, 60)
+        print("✅ Connected to MQTT Broker!")
+    except:
+        print("❌ Failed to connect. Retrying in 5 seconds...")
+        time.sleep(5)
+        connect_mqtt()
+
+connect_mqtt()  # Ensure connection is established
+
+# Simulated Fire Data
+while True:
+    fire_data = {
+        "temperature": round(random.uniform(45, 75), 2),  # Simulated temperature
+        "gps": {"latitude": 28.6139, "longitude": 77.2090},  # Example coordinates
+        "status": "🔥 Fire Detected!"
+    }
+    
+    # Convert data to JSON and send to cloud
+    client.publish(TOPIC, json.dumps(fire_data))
+    print(f"📡 Sent Data: {fire_data}")
+    
+    time.sleep(5)  # Send data every 5 seconds
