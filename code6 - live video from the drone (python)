@@ -1,0 +1,35 @@
+pip install opencv-python flask socketio ----------- required to install the packages 
+
+import cv2
+import socket
+import pickle
+import struct
+
+# Initialize Camera (0 for USB webcam, 1 for Pi Camera)
+cap = cv2.VideoCapture(0)
+
+# Set up server
+server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+server_socket.bind(("0.0.0.0", 8080))  # Host on all IPs, port 8080
+server_socket.listen(5)
+print("📡 Waiting for connection...")
+
+conn, addr = server_socket.accept()
+print(f"✅ Connection established: {addr}")
+
+while cap.isOpened():
+    ret, frame = cap.read()
+    if not ret:
+        break
+
+    # Encode and send frame
+    data = pickle.dumps(frame)
+    try:
+        conn.sendall(struct.pack("Q", len(data)) + data)
+    except BrokenPipeError:
+        print("❌ Connection lost. Waiting for reconnection...")
+        conn, addr = server_socket.accept()
+        print(f"✅ Reconnected: {addr}")
+
+cap.release()
+conn.close()
