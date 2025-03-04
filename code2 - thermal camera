@@ -1,0 +1,18 @@
+import cv2
+import numpy as np
+import subprocess
+from pylepton import Lepton
+
+def capture_thermal_image():
+    with Lepton() as l:
+        thermal_image, _ = l.capture()
+    return thermal_image
+
+while True:
+    image = capture_thermal_image()
+    fire_detected = np.mean(image) > 50  # Fire detection threshold
+
+    if fire_detected:
+        print("🔥 Fire Detected! Activating motors & suppression.")
+        subprocess.run(["./motor_control"])
+        time.sleep(5)
