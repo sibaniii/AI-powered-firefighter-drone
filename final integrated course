@@ -1,0 +1,140 @@
+import smbus
+import time
+import subprocess
+import cv2
+import numpy as np
+import socket
+import pickle
+import struct
+import paho.mqtt.client as mqtt
+import serial
+import RPi.GPIO as GPIO
+from pylepton import Lepton
+
+# === GPIO & Hardware Setup ===
+MOTOR_L1, MOTOR_L2 = 17, 27
+MOTOR_R1, MOTOR_R2 = 22, 23
+SPRAYER = 24
+TRIG, ECHO = 18, 25
+GPIO.setmode(GPIO.BCM)
+GPIO.setup([MOTOR_L1, MOTOR_L2, MOTOR_R1, MOTOR_R2, SPRAYER], GPIO.OUT)
+GPIO.setup(TRIG, GPIO.OUT)
+GPIO.setup(ECHO, GPIO.IN)
+GPIO.output(SPRAYER, GPIO.LOW)
+
+# === Fire Detection - MLX90614 Thermal Sensor Setup ===
+bus = smbus.SMBus(1)
+MLX90614_ADDRESS, OBJECT_TEMP = 0x5A, 0x07
+
+# === GPS Tracking Setup (Ublox NEO-M8N) ===
+gps = serial.Serial("/dev/serial0", baudrate=9600, timeout=1)
+
+# === MQTT Setup (For Fire Alerts & GPS Data) ===
+BROKER, TOPIC = "broker.hivemq.com", "firefighter/drone"
+mqtt_client = mqtt.Client()
+mqtt_client.connect(BROKER, 1883, 60)
+
+# === Live Video Streaming Setup ===
+server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+server_socket.bind(("0.0.0.0", 8080))
+server_socket.listen(5)
+print("📡 Waiting for connection...")
+conn, addr = server_socket.accept()
+print(f"✅ Video Connection Established: {addr}")
+
+# === Function: Read Temperature from MLX90614 ===
+def read_temperature():
+    try:
+        temp_raw = bus.read_word_data(MLX90614_ADDRESS, OBJECT_TEMP)
+        return (temp_raw * 0.02) - 273.15  # Convert to Celsius
+    except OSError:
+        print("❌ Error: Could not read thermal sensor.")
+        return None
+
+# === Function: Capture Thermal Image from FLIR Camera ===
+def capture_thermal_image():
+    with Lepton() as l:
+        thermal_image, _ = l.capture()
+    return thermal_image
+
+# === Function: Get Distance from Ultrasonic Sensor ===
+def get_distance():
+    GPIO.output(TRIG, False)
+    time.sleep(0.1)
+    GPIO.output(TRIG, True)
+    time.sleep(0.00001)
+    GPIO.output(TRIG, False)
+    
+    pulse_start, pulse_end = time.time(), time.time()
+    while GPIO.input(ECHO) == 0:
+        pulse_start = time.time()
+    while GPIO.input(ECHO) == 1:
+        pulse_end = time.time()
+    
+    return round((pulse_end - pulse_start) * 17150, 2)
+
+# === Function: Get GPS Location ===
+def get_gps_location():
+    while True:
+        data = gps.readline().decode('utf-8', errors='ignore')
+        if data.startswith('$GPGGA'):
+            gps_data = data.split(',')
+            if gps_data[2] and gps_data[4]:
+                return gps_data[2], gps_data[4]
+    return None, None
+
+# === Function: Send Fire Alert & GPS Data via MQTT ===
+def send_fire_alert():
+    lat, lon = get_gps_location()
+    fire_data = {"temperature": round(read_temperature(), 2), "gps": {"lat": lat, "lon": lon}, "status": "🔥 Fire Detected!"}
+    mqtt_client.publish(TOPIC, str(fire_data))
+    print(f"📡 Fire Alert Sent: {fire_data}")
+
+# === Function: Activate Fire Suppression System ===
+def activate_sprayer():
+    print("💦 Spraying Water/Foam...")
+    GPIO.output(SPRAYER, GPIO.HIGH)
+    time.sleep(5)
+    GPIO.output(SPRAYER, GPIO.LOW)
+
+# === Function: Move Drone Forward ===
+def move_forward():
+    GPIO.output(MOTOR_L1, True)
+    GPIO.output(MOTOR_L2, False)
+    GPIO.output(MOTOR_R1, True)
+    GPIO.output(MOTOR_R2, False)
+
+# === Function: Stop Drone Motors ===
+def stop_motors():
+    GPIO.output([MOTOR_L1, MOTOR_L2, MOTOR_R1, MOTOR_R2], False)
+
+# === Main Drone Loop ===
+while True:
+    temperature = read_temperature()
+    thermal_image = capture_thermal_image()
+    fire_detected = np.mean(thermal_image) > 50
+
+    if temperature and temperature > 50 or fire_detected:
+        print("🚨 Fire Detected! Moving drone toward fire...")
+        send_fire_alert()
+        move_forward()
+        time.sleep(3)
+        activate_sprayer()
+        stop_motors()
+
+    distance = get_distance()
+    if distance < 20:
+        print("⚠️ Obstacle detected! Stopping drone.")
+        stop_motors()
+
+    ret, frame = cv2.VideoCapture(0).read()
+    if ret:
+        data = pickle.dumps(frame)
+        try:
+            conn.sendall(struct.pack("Q", len(data)) + data)
+        except BrokenPipeError:
+            print("❌ Video Connection Lost. Reconnecting...")
+            conn, addr = server_socket.accept()
+            print(f"✅ Video Reconnected: {addr}")
+
+    time.sleep(1)
