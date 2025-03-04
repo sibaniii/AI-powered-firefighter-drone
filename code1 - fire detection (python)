@@ -1,0 +1,30 @@
+import smbus
+import time
+import subprocess  # To call C++ motor control
+
+# MLX90614 Thermal Sensor Setup
+bus = smbus.SMBus(1)
+MLX90614_ADDRESS = 0x5A
+OBJECT_TEMP = 0x07
+
+def read_temperature():
+    try:
+        temp_raw = bus.read_word_data(MLX90614_ADDRESS, OBJECT_TEMP)
+        temp_celsius = (temp_raw * 0.02) - 273.15  # Convert to Celsius
+        return temp_celsius
+    except OSError:
+        print("❌ Error: Could not read thermal sensor.")
+        return None
+
+while True:
+    temperature = read_temperature()
+    
+    if temperature is not None:
+        print(f"🔥 Temperature: {temperature:.2f}°C")
+
+        if temperature > 50:  # Fire detected
+            print("🚨 Fire Detected! Activating drone movement and sprayer...")
+            subprocess.run(["./motor_control"])  # Calls C++ motor control
+            time.sleep(5)  # Avoid continuous activation
+
+    time.sleep(1)  # Loop delay
