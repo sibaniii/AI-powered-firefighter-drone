@@ -11,7 +11,7 @@ def capture_thermal_image():
 while True:
     image = capture_thermal_image()
     fire_detected = np.mean(image) > 50  # Fire detection threshold
-
+ 
     if fire_detected:
         print("🔥 Fire Detected! Activating motors & suppression.")
         subprocess.run(["./motor_control"])
