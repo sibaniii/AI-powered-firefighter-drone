@@ -1,0 +1,23 @@
+import serial
+
+# GPS Module Setup
+gps = serial.Serial("/dev/serial0", baudrate=9600, timeout=1)
+
+def get_gps_location():
+    while True:
+        data = gps.readline().decode('utf-8', errors='ignore')
+        if data.startswith('$GPGGA'):  # Get latitude & longitude
+            gps_data = data.split(',')
+            if gps_data[2] and gps_data[4]:  # Ensure valid data
+                latitude = gps_data[2]
+                longitude = gps_data[4]
+                return latitude, longitude
+    return None, None
+
+while True:
+    lat, lon = get_gps_location()
+    if lat and lon:
+        print(f"📍 GPS Location: Latitude {lat}, Longitude {lon}")
+    else:
+        print("❌ GPS Signal Lost!")
+    time.sleep(2)
