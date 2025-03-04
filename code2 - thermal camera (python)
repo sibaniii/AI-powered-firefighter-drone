@@ -15,4 +15,4 @@ while True:
     if fire_detected:
         print("🔥 Fire Detected! Activating motors & suppression.")
         subprocess.run(["./motor_control"])
-        time.sleep(5)
+        time.sleep(5) 
