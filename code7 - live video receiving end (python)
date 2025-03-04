@@ -1,0 +1,22 @@
+import cv2
+import socket
+import pickle
+import struct
+
+client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+client_socket.connect(("DRONE_IP_ADDRESS", 8080))
+
+while True:
+    data_size = struct.unpack("Q", client_socket.recv(8))[0]
+    frame_data = b""
+    while len(frame_data) < data_size:
+        frame_data += client_socket.recv(4096)
+
+    frame = pickle.loads(frame_data)
+    cv2.imshow("🔥 Live Drone Camera", frame)
+
+    if cv2.waitKey(1) == ord('q'):
+        break
+
+client_socket.close()
+cv2.destroyAllWindows()
