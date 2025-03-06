@@ -22,7 +22,7 @@ while True:
     if temperature is not None:
         print(f"🔥 Temperature: {temperature:.2f}°C")
 
-        if temperature > 50:  # Fire detected
+        if temperature > 200:  # Fire detected
             print("🚨 Fire Detected! Activating drone movement and sprayer...")
             subprocess.run(["./motor_control"])  # Calls C++ motor control
             time.sleep(5)  # Avoid continuous activation
