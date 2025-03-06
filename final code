@@ -1,0 +1,224 @@
+import smbus
+import time
+import cv2
+import numpy as np
+import socket
+import pickle
+import struct
+import paho.mqtt.client as mqtt
+import serial
+import RPi.GPIO as GPIO
+from pylepton import Lepton
+from math import isnan
+import json
+
+# === GPIO & Hardware Setup ===
+MOTOR_L1, MOTOR_L2 = 17, 27  # Left motor
+MOTOR_R1, MOTOR_R2 = 22, 23  # Right motor
+SPRAYER = 24
+TRIG, ECHO = 18, 25  # Ultrasonic sensor
+GPIO.setmode(GPIO.BCM)
+try:
+    GPIO.setup([MOTOR_L1, MOTOR_L2, MOTOR_R1, MOTOR_R2, SPRAYER], GPIO.OUT)
+    GPIO.setup(TRIG, GPIO.OUT)
+    GPIO.setup(ECHO, GPIO.IN)
+    GPIO.output([MOTOR_L1, MOTOR_L2, MOTOR_R1, MOTOR_R2, SPRAYER], GPIO.LOW)
+except RuntimeError as e:
+    print(f"❌ GPIO Setup Error: {e}")
+    exit(1)
+
+# === Fire Detection - MLX90614 Thermal Sensor Setup ===
+bus = smbus.SMBus(1)
+MLX90614_ADDRESS, OBJECT_TEMP = 0x5A, 0x07
+
+# === GPS Tracking Setup (Ublox NEO-M8N) ===
+try:
+    gps = serial.Serial("/dev/serial0", baudrate=9600, timeout=1)
+except serial.SerialException as e:
+    print(f"❌ GPS Serial Error: {e}")
+    gps = None
+
+# === MQTT Setup (For Fire Alerts & GPS Data) ===
+BROKER, TOPIC = "broker.hivemq.com", "firefighter/drone"
+mqtt_client = mqtt.Client()
+
+def on_connect(client, userdata, flags, rc):
+    print("✅ Connected to MQTT broker" if rc == 0 else "❌ MQTT connection failed")
+
+mqtt_client.on_connect = on_connect
+try:
+    mqtt_client.connect(BROKER, 1883, 60)
+    mqtt_client.loop_start()  # Run MQTT in background thread
+except Exception as e:
+    print(f"❌ MQTT Connection Error: {e}")
+
+# === Live Video Streaming Setup ===
+server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+server_socket.bind(("0.0.0.0", 8080))
+server_socket.listen(5)
+print("📡 Waiting for connection...")
+conn, addr = server_socket.accept()
+print(f"✅ Video Connection Established: {addr}")
+
+# === Initialize Video Capture ===
+cap = cv2.VideoCapture(0)
+if not cap.isOpened():
+    print("❌ Error: Could not open video capture.")
+    exit(1)
+
+# === Function: Read Temperature from MLX90614 ===
+def read_temperature():
+    try:
+        temp_raw = bus.read_word_data(MLX90614_ADDRESS, OBJECT_TEMP)
+        return (temp_raw * 0.02) - 273.15  # Convert to Celsius
+    except OSError:
+        print("❌ Error: Could not read thermal sensor.")
+        return float('nan')
+
+# === Function: Capture Thermal Image from FLIR Camera ===
+def capture_thermal_image():
+    try:
+        with Lepton() as l:
+            thermal_image, _ = l.capture()
+            # Basic normalization (adjust per Lepton documentation)
+            thermal_image = (thermal_image * 0.01) - 273.15
+        return thermal_image
+    except Exception as e:
+        print(f"❌ Thermal Camera Error: {e}")
+        return None
+
+# === Function: Get Distance from Ultrasonic Sensor ===
+def get_distance():
+    try:
+        GPIO.output(TRIG, False)
+        time.sleep(0.05)  # Reduced delay for faster response
+        GPIO.output(TRIG, True)
+        time.sleep(0.00001)
+        GPIO.output(TRIG, False)
+
+        start_time = time.time()
+        while GPIO.input(ECHO) == 0 and time.time() - start_time < 0.1:
+            pulse_start = time.time()
+        while GPIO.input(ECHO) == 1 and time.time() - start_time < 0.1:
+            pulse_end = time.time()
+        if 'pulse_start' in locals() and 'pulse_end' in locals():
+            return round((pulse_end - pulse_start) * 17150, 2)
+        return float('inf')  # No echo detected
+    except Exception as e:
+        print(f"❌ Ultrasonic Error: {e}")
+        return float('inf')
+
+# === Function: Get GPS Location ===
+def get_gps_location(timeout=1):
+    if not gps:
+        return None, None
+    start_time = time.time()
+    while time.time() - start_time < timeout:
+        try:
+            data = gps.readline().decode('utf-8', errors='ignore')
+            if data.startswith('$GPGGA'):
+                gps_data = data.split(',')
+                if gps_data[2] and gps_data[4]:
+                    return gps_data[2], gps_data[4]
+        except Exception as e:
+            print(f"❌ GPS Read Error: {e}")
+    return None, None
+
+# === Function: Send Fire Alert & GPS Data via MQTT ===
+def send_fire_alert(temperature):
+    lat, lon = get_gps_location()
+    fire_data = {
+        "temperature": round(temperature, 2) if not isnan(temperature) else None,
+        "gps": {"lat": lat, "lon": lon},
+        "status": "🔥 Fire Detected!"
+    }
+    try:
+        mqtt_client.publish(TOPIC, json.dumps(fire_data))
+        print(f"📡 Fire Alert Sent: {fire_data}")
+    except Exception as e:
+        print(f"❌ MQTT Publish Error: {e}")
+
+# === Function: Activate Fire Suppression System ===
+def activate_sprayer():
+    print("💦 Spraying Water/Foam...")
+    GPIO.output(SPRAYER, GPIO.HIGH)
+    time.sleep(5)  # Non-blocking could be added with threading if needed
+    GPIO.output(SPRAYER, GPIO.LOW)
+
+# === Motor Control Functions ===
+def move_forward():
+    GPIO.output(MOTOR_L1, True)
+    GPIO.output(MOTOR_L2, False)
+    GPIO.output(MOTOR_R1, True)
+    GPIO.output(MOTOR_R2, False)
+
+def move_backward():
+    GPIO.output(MOTOR_L1, False)
+    GPIO.output(MOTOR_L2, True)
+    GPIO.output(MOTOR_R1, False)
+    GPIO.output(MOTOR_R2, True)
+
+def turn_left():
+    GPIO.output(MOTOR_L1, False)
+    GPIO.output(MOTOR_L2, True)
+    GPIO.output(MOTOR_R1, True)
+    GPIO.output(MOTOR_R2, False)
+
+def stop_motors():
+    GPIO.output([MOTOR_L1, MOTOR_L2, MOTOR_R1, MOTOR_R2], False)
+
+# === Main Drone Loop ===
+try:
+    while True:
+        temperature = read_temperature()
+        thermal_image = capture_thermal_image()
+        fire_detected = thermal_image is not None and np.mean(thermal_image) > 50
+
+        # Fire Detection and Response
+        if not isnan(temperature) and (temperature > 50 or fire_detected):
+            print("🚨 Fire Detected! Moving drone toward fire...")
+            send_fire_alert(temperature)
+            move_forward()
+            time.sleep(3)
+            activate_sprayer()
+            stop_motors()
+
+        # Obstacle Avoidance
+        distance = get_distance()
+        if distance < 20:
+            print("⚠️ Obstacle detected! Stopping drone.")
+            stop_motors()
+            move_backward()
+            time.sleep(1)
+            turn_left()
+            time.sleep(1)
+            stop_motors()
+
+        # Video Streaming
+        ret, frame = cap.read()
+        if ret:
+            data = pickle.dumps(frame)
+            try:
+                conn.sendall(struct.pack("Q", len(data)) + data)
+            except (BrokenPipeError, ConnectionResetError):
+                print("❌ Video Connection Lost. Reconnecting...")
+                conn.close()
+                conn, addr = server_socket.accept()
+                print(f"✅ Video Reconnected: {addr}")
+        else:
+            print("❌ Video Frame Capture Failed.")
+
+        time.sleep(0.1)  # Reduced delay for better responsiveness
+
+except KeyboardInterrupt:
+    print("🛑 Program terminated by user.")
+finally:
+    # Cleanup resources
+    cap.release()
+    GPIO.cleanup()
+    server_socket.close()
+    if gps:
+        gps.close()
+    mqtt_client.loop_stop()
+    mqtt_client.disconnect()
+    print("✅ Resources cleaned up.")
